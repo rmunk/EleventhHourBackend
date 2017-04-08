@@ -5,27 +5,35 @@ const admin = require('firebase-admin');
 admin.initializeApp(functions.config().firebase);
 
 /**
- * Triggers when a user creates a new booking and sends a notification to provider.
+ * Triggers when a user creates a new booking or canceles existing one and sends a notification to provider.
  *
  * Users add a booking to `/bookings/{providerUid}/{bookingUid}`.
  * Provider staff save their device notification tokens to `/notificationTokens/panel/{providerUid}/{notificationToken}`.
  */
-exports.sendNewBookingNotification = functions.database.ref('/bookings/{providerUid}/{bookingUid}').onWrite(event => {
+exports.sendNotificationToProvider = functions.database.ref('/bookings/{providerUid}/{bookingUid}').onWrite(event => {
+    console.log('sendNotificationToProvider v0.1.0');
+
     const bookingUid = event.params.bookingUid;
     const providerUid = event.params.providerUid;
 
     // If booking deleted we exit the function.
     if (!event.data.val()) {
-        return console.log('Booking ', bookingUid, 'for provider', providerUid, 'has been deleted.');
-    }
-
-       // Only send this notification when booking is first created.
-      if (event.data.previous.exists()) {
-        return console.log('Booking ', bookingUid, 'for provider', providerUid, 'already exists.');
+        return console.log('Booking ', bookingUid, 'has been deleted.');
     }
 
     // Get booking
     const booking = event.data.val();
+    const oldBooking = event.data.previous.val();
+
+    // Send only if booking status has changed
+    if (oldBooking && oldBooking.status == booking.status) {
+        return console.log('Booking ', bookingUid, 'status did not change.');
+    }
+
+    // Send only if user has made a new booking or canceled it
+    if (booking.status != 0 && booking.status != -2) {
+        return console.log('Booking ', bookingUid, 'status changed by provider.');
+    }
 
     // Get the list of device notification tokens.
     return admin.database().ref(`/notificationTokens/panel/${providerUid}`).once('value').then(result => {
@@ -38,10 +46,20 @@ exports.sendNewBookingNotification = functions.database.ref('/bookings/{provider
         console.log('There are', tokensSnapshot.numChildren(), 'tokens to send notifications to.');
 
         // Notification details.
+        var title;
+        switch (booking.status) {
+            case 0:
+                title = 'You have new booking';
+                break;
+            case -2:
+                title = 'Booking has been canceled';
+                break;
+        }
+
         const payload = {
             notification: {
-                title: 'You have a new booking!',
-                body: `${booking.serviceName} from ${booking.userName}.`
+                title: title,
+                body: `${booking.serviceName} by ${booking.userName}.`
             }
         };
 
